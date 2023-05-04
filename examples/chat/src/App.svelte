@@ -1,47 +1,142 @@
 <script lang="ts">
-  import svelteLogo from './assets/svelte.svg'
-  import viteLogo from '/vite.svg'
-  import Counter from './lib/Counter.svelte'
+  import { onMount } from 'svelte';
+
+  let messages = []
+  let presence = []
+  const clientId = Math.random().toString(36).substr(2, 9);
+  const colors = {};
+
+  let cursors = {};
+
+  const socket = new WebSocket('ws://synapse-rs.fly.dev/ws');
+
+  onMount(() => {
+    socket.addEventListener('open', function (_event) {
+      socket.send(JSON.stringify({ type: 'join', channel: 'chat' }))
+      socket.send(JSON.stringify({ type: 'join', channel: 'cursor' }));
+    })
+
+    socket.addEventListener('message', function (event) {
+      const { type, channel, body, connections } = JSON.parse(event.data)
+
+      if (type === 'broadcast' && channel === 'chat') {
+        messages = [...messages, body]
+      } else if (type === 'broadcast' && channel === 'cursor') {
+        cursors = { ...cursors, [body.sender]: body.position };
+      } else if (type === 'presence' && channel === 'chat') {
+        presence = connections || []
+        presence.forEach(connection => {
+          if (!colors[connection]) {
+            colors[connection] = randomColor();
+          }
+        });
+      }
+    })
+  });
+
+  function randomColor() {
+    const letters = '0123456789ABCDEF';
+    let color = '#';
+    for (let i = 0; i < 6; i++) {
+      color += letters[Math.floor(Math.random() * 16)];
+    }
+    return color;
+  }
+
+  $: console.log(cursors)
+
+  function handleMouseMove(event) {
+    const position = { x: event.clientX, y: event.clientY };
+    socket.send(JSON.stringify({ type: 'broadcast', channel: 'cursor', body: { sender: clientId, position } }));
+  }
 </script>
 
-<main>
-  <div>
-    <a href="https://vitejs.dev" target="_blank" rel="noreferrer">
-      <img src={viteLogo} class="logo" alt="Vite Logo" />
-    </a>
-    <a href="https://svelte.dev" target="_blank" rel="noreferrer">
-      <img src={svelteLogo} class="logo svelte" alt="Svelte Logo" />
-    </a>
-  </div>
-  <h1>Vite + Svelte</h1>
-
-  <div class="card">
-    <Counter />
-  </div>
-
-  <p>
-    Check out <a href="https://github.com/sveltejs/kit#readme" target="_blank" rel="noreferrer">SvelteKit</a>, the official Svelte app framework powered by Vite!
-  </p>
-
-  <p class="read-the-docs">
-    Click on the Vite and Svelte logos to learn more
-  </p>
-</main>
-
 <style>
-  .logo {
-    height: 6em;
-    padding: 1.5em;
-    will-change: filter;
-    transition: filter 300ms;
+  main {
+    font-family: Arial, sans-serif;
+    width: 100%;
+    margin: 0 auto;
+    padding: 16px;
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
   }
-  .logo:hover {
-    filter: drop-shadow(0 0 2em #646cffaa);
+
+  ul {
+    list-style-type: none;
+    padding: 0;
   }
-  .logo.svelte:hover {
-    filter: drop-shadow(0 0 2em #ff3e00aa);
+
+  li {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
   }
-  .read-the-docs {
-    color: #888;
+
+  .circle {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+  }
+
+  form {
+    display: flex;
+    gap: 8px;
+  }
+
+  input[type="text"] {
+    flex-grow: 1;
+  }
+
+  .cursor {
+    position: absolute;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background-color: currentcolor;
   }
 </style>
+
+<main on:mousemove={handleMouseMove}>
+  <ul>
+    {#each messages as message}
+      <li>
+        <div class="circle" style="background-color: {colors[message.sender]}"></div>
+        <p style="color: {colors[message.sender]}">{message.text}</p>
+      </li>
+    {/each}
+  </ul>
+
+  <ul>
+    {#each presence as connection}
+      <li>
+        <div class="circle" style="background-color: {colors[connection]}" title={connection}></div>
+      </li>
+    {/each}
+  </ul>
+
+  <form on:submit|preventDefault={e => {
+    const input = e.target.querySelector('input')
+    const message = input.value
+    input.value = ''
+
+    messages = [...messages, { sender: clientId, text: message }]
+
+    socket.send(JSON.stringify({ type: 'broadcast', channel: 'chat', body: { sender: clientId, text: message } }))
+  }}>
+    <input type="text" />
+    <button>Send</button>
+  </form>
+
+  {#each Object.entries(cursors) as [sender, position]}
+    {#if sender !== clientId}
+      <div class="cursor" style="color: {colors[sender]}; left: {position.x}px; top: {position.y}px"></div>
+    {/if}
+  {/each}
+</main>
