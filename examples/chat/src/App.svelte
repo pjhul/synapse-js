@@ -1,37 +1,39 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+import { SynapseClient } from './lib/synapse';
+
+  const clientId = Math.random().toString(36).substr(2, 9);
 
   let messages = []
   let presence = []
-  const clientId = Math.random().toString(36).substr(2, 9);
   const colors = {};
+  let input = ""
 
   let cursors = {};
 
-  const socket = new WebSocket('ws://synapse-rs.fly.dev/ws');
+  let client = new SynapseClient('ws://localhost:8080/ws');
 
-  onMount(() => {
-    socket.addEventListener('open', function (_event) {
-      socket.send(JSON.stringify({ type: 'join', channel: 'chat' }))
-      socket.send(JSON.stringify({ type: 'join', channel: 'cursor' }));
-    })
+  onMount(async () => {
+    await client.connect();
 
-    socket.addEventListener('message', function (event) {
-      const { type, channel, body, connections } = JSON.parse(event.data)
+    client.join(['chat', 'cursor']);
 
-      if (type === 'broadcast' && channel === 'chat') {
-        messages = [...messages, body]
-      } else if (type === 'broadcast' && channel === 'cursor') {
-        cursors = { ...cursors, [body.sender]: body.position };
-      } else if (type === 'presence' && channel === 'chat') {
-        presence = connections || []
-        presence.forEach(connection => {
-          if (!colors[connection]) {
-            colors[connection] = randomColor();
-          }
-        });
-      }
-    })
+    client.on('chat', (msg) => {
+      messages = [...messages, msg]
+    });
+
+    client.on('cursor', (msg) => {
+      cursors = { ...cursors, [msg.sender]: msg.position };
+    });
+
+    client.presence('chat', (connections) => {
+      presence = connections || []
+      presence.forEach(connection => {
+        if (!colors[connection]) {
+          colors[connection] = randomColor();
+        }
+      });
+    });
   });
 
   function randomColor() {
@@ -43,68 +45,30 @@
     return color;
   }
 
-  $: console.log(cursors)
+  $: console.log(colors)
 
   function handleMouseMove(event) {
-    const position = { x: event.clientX, y: event.clientY };
-    socket.send(JSON.stringify({ type: 'broadcast', channel: 'cursor', body: { sender: clientId, position } }));
+    client.broadcast('cursor', { sender: clientId, position: {
+      x: event.clientX, y: event.clientY
+    } });
   }
+
+  const handleSubmit = () => {
+    let message = {
+      sender: clientId,
+      text: input,
+    };
+
+    messages = [...messages, message];
+
+    client.broadcast('chat', message);
+
+    input = "";
+  };
 </script>
 
-<style>
-  main {
-    font-family: Arial, sans-serif;
-    width: 100%;
-    margin: 0 auto;
-    padding: 16px;
-    position: fixed;
-    top: 0;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-  }
-
-  ul {
-    list-style-type: none;
-    padding: 0;
-  }
-
-  li {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 12px;
-  }
-
-  .circle {
-    width: 24px;
-    height: 24px;
-    border-radius: 50%;
-  }
-
-  form {
-    display: flex;
-    gap: 8px;
-  }
-
-  input[type="text"] {
-    flex-grow: 1;
-  }
-
-  .cursor {
-    position: absolute;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background-color: currentcolor;
-  }
-</style>
-
-<main on:mousemove={handleMouseMove}>
-  <ul>
+<main class="w-full h-full fixed inset-0 flex flex-col" on:mousemove={handleMouseMove}>
+  <ul class="flex-grow">
     {#each messages as message}
       <li>
         <div class="circle" style="background-color: {colors[message.sender]}"></div>
@@ -113,30 +77,24 @@
     {/each}
   </ul>
 
-  <ul>
-    {#each presence as connection}
-      <li>
-        <div class="circle" style="background-color: {colors[connection]}" title={connection}></div>
-      </li>
-    {/each}
-  </ul>
+  <div class="bg-gray-50 flex flex-col border-t p-4">
+     <ul>
+      {#each presence as connection}
+        <li>
+          <div class="circle" style="background-color: {colors[connection]}" title={connection}></div>
+        </li>
+      {/each}
+    </ul>
 
-  <form on:submit|preventDefault={e => {
-    const input = e.target.querySelector('input')
-    const message = input.value
-    input.value = ''
-
-    messages = [...messages, { sender: clientId, text: message }]
-
-    socket.send(JSON.stringify({ type: 'broadcast', channel: 'chat', body: { sender: clientId, text: message } }))
-  }}>
-    <input type="text" />
-    <button>Send</button>
-  </form>
+    <form on:submit|preventDefault={handleSubmit}>
+      <input bind:value={input} type="text" />
+      <button>Send</button>
+    </form>
+  </div>
 
   {#each Object.entries(cursors) as [sender, position]}
     {#if sender !== clientId}
-      <div class="cursor" style="color: {colors[sender]}; left: {position.x}px; top: {position.y}px"></div>
+      <div class="w-8 h-8 rounded-full fixed bg-black" style="background-color: {colors[sender]}; left: {position.x}px; top: {position.y}px"></div>
     {/if}
   {/each}
 </main>
